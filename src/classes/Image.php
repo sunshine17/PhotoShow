@@ -87,6 +87,14 @@ class Image implements HTMLObject
 			$this->t = "Big";
 		}else{
 			$this->t = "Img";
+
+			if($this->x >= 1200 || $this->y >= 1200){
+				if ($this->x > $this->y){
+					$this->x = 1200;
+				}else{
+					$this->x = $this->x * 1200 / $this->y;
+				}
+			}
 		}
 	}
 	
@@ -100,13 +108,13 @@ class Image implements HTMLObject
 	public function toHTML(){
 		echo 	"<div id='image_big' ";
 		echo 	"style='";
-		echo 		" max-width:".$this->x."px;";
 		echo 		" background: black url(\"?t=".$this->t."&f=$this->fileweb\") no-repeat center center;";
 		echo 		" background-size: contain;";
 		echo 		" -moz-background-size: contain;";
 		echo 		" height:100%;";
 		echo 	"';>";
 
+		echo "<input type='hidden' id='imageurl' value='?t=Big&f=$this->fileweb'>";
 		echo 	"<a href='?f=$this->dir'>"; 
 		echo 	"<img src='inc/img.png' height='100%' width='100%' style='opacity:0;'>";
 		echo 	"</a>";

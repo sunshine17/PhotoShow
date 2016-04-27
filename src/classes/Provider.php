@@ -1,5 +1,4 @@
-<?php
-/**
+<?php /**
  * This file implements the class Provider.
  * 
  * PHP versions 4 and 5
@@ -130,7 +129,7 @@ class Provider
 
         $basefile	= 	new File($file);
         $basepath	=	File::a2r($file);
-        $path	=	Settings::$thumbs_dir.dirname($basepath)."/".$basefile->name.".webm";	
+        $path	=	Settings::$thumbs_dir.dirname($basepath)."/".$basefile->name.".mp4";
 
         if(!isset($path) || !file_exists($path)){
             error_log('ERROR/Provider::Video: path:'.$path.' does not exist, using '.$file);
@@ -148,61 +147,162 @@ class Provider
         header("Etag: $etag"); 
         header("Cache-Control: maxage=".$expires);
         header('Expires: ' . gmdate('D, d M Y H:i:s', time()+$expires) . ' GMT');
-        header('Content-type: video/webm');
-        readfile($path);
+        header('Content-type: video/mp4');
+        $fp = @fopen($path, 'rb');
+
+        $size   = filesize($path); // File size
+        $length = $size;           // Content length
+        $start  = 0;               // Start byte
+        $end    = $size - 1;       // End byte
+
+        header("Accept-Ranges: 0-$length");
+        if (isset($_SERVER['HTTP_RANGE'])) {
+
+            $c_start = $start;
+            $c_end   = $end;
+
+            list(, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
+            if (strpos($range, ',') !== false) {
+                header('HTTP/1.1 416 Requested Range Not Satisfiable');
+                header("Content-Range: bytes $start-$end/$size");
+                exit;
+            }
+            if ($range == '-') {
+                $c_start = $size - substr($range, 1);
+            }else{
+                $range  = explode('-', $range);
+                $c_start = $range[0];
+                $c_end   = (isset($range[1]) && is_numeric($range[1])) ? $range[1] : $size;
+            }
+            $c_end = ($c_end > $end) ? $end : $c_end;
+            if ($c_start > $c_end || $c_start > $size - 1 || $c_end >= $size) {
+                header('HTTP/1.1 416 Requested Range Not Satisfiable');
+                header("Content-Range: bytes $start-$end/$size");
+                exit;
+            }
+            $start  = $c_start;
+            $end    = $c_end;
+            $length = $end - $start + 1;
+            fseek($fp, $start);
+            header('HTTP/1.1 206 Partial Content');
+	    }
+        header("Content-Range: bytes $start-$end/$size");
+        header("Content-Length: ".$length);
+
+        $buffer = 1024 * 8;
+	    while(!feof($fp) && ($p = ftell($fp)) <= $end) {
+
+            if ($p + $buffer > $end) {
+                $buffer = $end - $p + 1;
+            }
+            set_time_limit(0);
+            echo fread($fp, $buffer);
+            flush();
+	    }
+        fclose($fp);
     }
 
-	public static function thumb($file){
-        require_once dirname(__FILE__).'/../phpthumb/ThumbLib.inc.php';
+    public static function thumb($file)
+    {
+        require_once dirname(__FILE__).'/../phpthumb/phpthumb.class.php';
 
         $path = File::r2a(File::a2r($file),Settings::$thumbs_dir);
 
-        if(!file_exists($path) || filectime($file) > filectime($path) ){
+        // We check that the thumb already exists, was created after the image, at the right size
+        $goodThumb = false;
+        if (file_exists($path) && filectime($file) < filectime($path)) {
+            $dim = getimagesize($path);
+            $goodThumb = ($dim[0] == Settings::$thumbs_size && $dim[1] == Settings::$thumbs_size );
+        }
+
+        /// If we need to create a thumb, then this is a new picture
+        if (!$goodThumb) {
+
+            if (Judge::is_public($file)) {
+                $r = new RSS(Settings::$conf_dir."/photos_feed.txt");
+                $webpath = Settings::$site_address."?f=".urlencode(File::a2r($file));
+                $r->add(basename($file),$webpath, "<img src='$webpath&t=Thb' />");
+            }
 
             /// Create directories
-            if(!file_exists(dirname($path))){
+            if (!file_exists(dirname($path))) {
                 @mkdir(dirname($path),0750,true);
             }
 
             /// Create thumbnail
-			$thumb = PhpThumbFactory::create($file);
-			$thumb->resize(200, 200);
-			if(File::Type($file)=="Image"){
-				$thumb->rotateImageNDegrees(Provider::get_orientation_degrees ($file));	
-			}
-			$thumb->save($path);
-		}
-		return $path;
-	}
+            $thumb = new phpthumb();
+            if (!empty(Settings::$imagemagick_path)) {
+                $thumb->config_imagemagick_path = Settings::$imagemagick_path;
+            }
+            $thumb->setSourceData(file_get_contents($file));
+            $thumb->CalculateThumbnailDimensions();
+            $thumb->w = Settings::$thumbs_size;
+            $thumb->h = Settings::$thumbs_size;
+            $thumb->zc = Settings::$thumbs_size;
+            $thumb->q = Settings::$quality_mini;
 
-	public static function small($file){
-		require_once dirname(__FILE__).'/../phpthumb/ThumbLib.inc.php';
+            if (File::Type($file) == 'Image' && Provider::get_orientation_degrees($file) != 0) {
+                $thumb->SourceImageToGD();
+                //$thumb->ra = Provider::get_orientation_degrees($file);
+                $thumb->Rotate();
+            }
 
-		$basefile	= 	new File($file);
-		$basepath	=	File::a2r($file);
-		$webimg	=	dirname($basepath)."/".$basefile->name."_small.".$basefile->extension;
-		
-		list($x,$y) = getimagesize($file);
-		if($x <= 800 && $y <= 600){	
-			return $file;
-		}
-		
-		$path =	File::r2a($webimg,Settings::$thumbs_dir);
+            $thumb->GenerateThumbnail();
+            $thumb->RenderToFile($path);
+            chmod($path,0775);
+        }
 
-		if(!file_exists($path) || filectime($file) > filectime($path)  ){
-			/// Create smaller image
-			if(!file_exists(dirname($path))){
-				@mkdir(dirname($path),0755,true);
-			}
-			$thumb = PhpThumbFactory::create($file);
-			$thumb->resize(800, 800);
-			if(File::Type($file)=="Image"){
-				$thumb->rotateImageNDegrees(Provider::get_orientation_degrees($file));	
-			}
-			$thumb->save($path);
-		}
-		return $path;
-	}
+        /* Implementation of webp... for later.
+        $webp = $path.".webp";
+        if(!file_exists($webp) ||  filectime($webp) < filectime($path) ){
+            imagewebp(imagecreatefromjpeg($path),$webp);
+        } */
+
+        return $path;
+    }
+
+    public static function small($file)
+    {
+        require_once dirname(__FILE__).'/../phpthumb/phpthumb.class.php';
+
+        $basefile = new File($file);
+        $basepath = File::a2r($file);
+        $webimg = dirname($basepath) . "/" . $basefile->name . "_small." . $basefile->extension;
+
+        list($x,$y) = getimagesize($file);
+        if($x <= 1200 && $y <= 1200){
+            return $file;
+        }
+
+        $path = File::r2a($webimg, Settings::$thumbs_dir);
+
+        /// Create smaller image
+        if (!file_exists($path) || filectime($file) > filectime($path)) {
+
+            if (!file_exists(dirname($path))) {
+                @mkdir(dirname($path),0755,true);
+            }
+
+            $thumb = new phpthumb();
+            $thumb->config_imagemagick_path = Settings::$imagemagick_path;
+            $thumb->setSourceData(file_get_contents($file));
+            $thumb->CalculateThumbnailDimensions();
+            $thumb->w = 1200;
+            $thumb->h = 1200;
+            $thumb->q = Settings::$quality_small;
+
+            if (File::Type($file) == 'Image' && Provider::get_orientation_degrees($file) != 0) {
+                $thumb->SourceImageToGD();
+                //$thumb->ra = Provider::get_orientation_degrees($file);
+                $thumb->Rotate();
+            }
+
+            $thumb->GenerateThumbnail();
+            $thumb->RenderToFile($path);
+        }
+
+        return $path;
+    }
 
 	/**
 	 * Provide an image to the user, if he is allowed to
@@ -215,7 +315,7 @@ class Provider
 	 * @author Thibaud Rohmer
 	 */
 	public static function Image($file,$thumb=false,$large=false,$output=true,$dl=false){
-		
+
 		if( !Judge::view($file)){
 			return;
 		}
@@ -245,7 +345,7 @@ class Provider
                     $basefile	= 	new File($file);
                     $basepath	=	File::a2r($file);
                     $path =	Settings::$thumbs_dir.dirname($basepath)."/".$basefile->name.".jpg";	
-                } elseif($thumb){ // Img called on a video, return the thumbnail
+                }elseif($thumb){ // Img called on a video, return the thumbnail
                     $path = Provider::thumb($file);
                 }else{
                     $path = Provider::small($file);
@@ -276,9 +376,9 @@ class Provider
 				header("Cache-Control: maxage=".$expires);
 				header('Expires: ' . gmdate('D, d M Y H:i:s', time()+$expires) . ' GMT');
 			}
-            header('Content-type: image/jpeg');
 
             if(File::Type($path)=="Image"){
+                header('Content-type: image/jpeg');
             	readfile($path);
             	return;
                 try {
@@ -288,43 +388,125 @@ class Provider
                     readfile($path);
                 }
             }else{
-                readfile($path);
+                $fp = @fopen($path, 'rb');
+
+                $size   = filesize($path); // File size
+                $length = $size;           // Content length
+                $start  = 0;               // Start byte
+                $end    = $size - 1;       // End byte
+
+                header('Content-type: video/mp4');
+                header("Accept-Ranges: 0-$length");
+                if (isset($_SERVER['HTTP_RANGE'])) {
+
+                    $c_start = $start;
+                    $c_end   = $end;
+
+                    list(, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
+                    if (strpos($range, ',') !== false) {
+                        header('HTTP/1.1 416 Requested Range Not Satisfiable');
+                        header("Content-Range: bytes $start-$end/$size");
+                        exit;
+                    }
+                    if ($range == '-') {
+                        $c_start = $size - substr($range, 1);
+                    }else{
+                        $range  = explode('-', $range);
+                        $c_start = $range[0];
+                        $c_end   = (isset($range[1]) && is_numeric($range[1])) ? $range[1] : $size;
+                    }
+                    $c_end = ($c_end > $end) ? $end : $c_end;
+                    if ($c_start > $c_end || $c_start > $size - 1 || $c_end >= $size) {
+                        header('HTTP/1.1 416 Requested Range Not Satisfiable');
+                        header("Content-Range: bytes $start-$end/$size");
+                        exit;
+                    }
+                    $start  = $c_start;
+                    $end    = $c_end;
+                    $length = $end - $start + 1;
+                    fseek($fp, $start);
+                    header('HTTP/1.1 206 Partial Content');
+                }
+                header("Content-Range: bytes $start-$end/$size");
+                header("Content-Length: ".$length);
+
+
+                $buffer = 1024 * 8;
+                while(!feof($fp) && ($p = ftell($fp)) <= $end) {
+
+                    if ($p + $buffer > $end) {
+                        $buffer = $end - $p + 1;
+                    }
+                    set_time_limit(0);
+                    echo fread($fp, $buffer);
+                    flush();
+                }
+
+                fclose($fp);
             }
         }
     }
 
+	/**
+	 * Generates a zip.
+	 *
+	 * @param string $dir  
+	 * @return void
+	 * @author Thibaud Rohmer
+	 */
 	public static function Zip($dir){
 
 		/// Check that user is allowed to acces this content
 		if( !Judge::view($dir)){
 			return;
 		}	
-			
-		/// Prepare file
-		$tmpfile = tempnam("tmp", "zip");
-		$zip = new ZipArchive();
-		$zip->open($tmpfile, ZipArchive::OVERWRITE);
 
-		/// Staff with content
+
+                // Get the relative path of the files
+		$delimPosition = strrpos($dir, '/');
+		if (strlen($dir) == $delimPosition) {
+		        echo "Error: Directory has a slash at the end";
+		        return;
+		}
+
+		// Create list with all filenames
 		$items = Menu::list_files($dir,true);
+		$itemsString = '';
 
 		foreach($items as $item){
 			if(Judge::view($item)){
-				$zip->addFile($item,basename(dirname($item))."/".basename($item));
+                                // Use only the relative path of the filename
+				$item = str_replace('//', '/', $item);
+				$itemsString.=" \"".str_replace( '"' , '\"' , substr( $item , $delimPosition + 1 ) )."\"";
 			}
 		}
 
 		// Close and send to user
-		$fname=basename($dir);
-		$zip->close();
 		header('Content-Type: application/zip');
-		header('Content-Length: ' . filesize($tmpfile));
-		header("Content-Disposition: attachment; filename=\"".htmlentities($fname, ENT_QUOTES ,'UTF-8').".zip\"");
-		readfile($tmpfile);
-		unlink($tmpfile);
+		header("Content-Disposition: attachment; filename=\"".htmlentities(basename($dir), ENT_QUOTES ,'UTF-8').".zip\"");
 
+                // Store the current working directory and change to the albums directory
+		$cwd = getcwd();
+		chdir(substr($dir,0,$delimPosition));
 
+		// ZIP-on-the-fly method copied from http://stackoverflow.com/questions/4357073
+		//
+		// use popen to execute a unix command pipeline
+		// and grab the stdout as a php stream
+		$fp = popen('zip -n .jpg:.JPG:.jpeg:.JPEG -0 - ' . $itemsString, 'r');
 
+		// pick a bufsize that makes you happy (8192 has been suggested).
+		$bufsize = 8192;
+		$buff = '';
+		while( !feof($fp) ) {
+		        $buff = fread($fp, $bufsize);
+                        echo $buff;
+                        /// flush();
+                }
+                pclose($fp);
+                
+                // Chang to the previous working directory
+                chdir($cwd);
 	}
 
 }

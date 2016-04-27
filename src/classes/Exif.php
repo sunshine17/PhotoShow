@@ -73,9 +73,10 @@ class Exif implements HTMLObject
 		if(!Judge::view($file))
 			return;
 
+
 		/// No exif extension installed
 		if (!in_array("exif", get_loaded_extensions())) {
-			$infos['']="Exif extension is not installed on the server available";
+			$infos['']="Exif extension is not installed on the server";
 			return;
 		}
 
@@ -108,7 +109,7 @@ class Exif implements HTMLObject
 		$this->wanted['Make'][]			=	'Make';
 		$this->wanted['Expo'][]			=	'ExposureTime';
 		$this->wanted['Focal Length'][]	=	'FocalLength';
-		$this->wanted['Aperture'][]		=	'ApertureValue';
+		$this->wanted['Aperture'][]		=	'FNumber';
 		$this->wanted['ISO'][]			=	'ISOSpeedRatings';
 		$this->wanted['Original Date'][]=	'DateTimeOriginal';
 	}
@@ -121,8 +122,7 @@ class Exif implements HTMLObject
 	 */
 	public function toHTML(){
 		if($this->exif){
-			echo "<div class='section'>";
-			echo '<h2>Exif</h2>';
+			echo '<h3>Exif</h3>';
 			echo "<table>";		
 			foreach($this->exif as $name=>$value){
 				echo "<tr><td class='td_data'>".htmlentities($name, ENT_QUOTES ,'UTF-8')."</td>";
@@ -184,8 +184,8 @@ class Exif implements HTMLObject
 									break;
 			case 'FocalLength':		$v		=	$this->frac2float($raw_exif[$d])." mm";
 									break;
-			case 'ApertureValue':	if($a = number_format($this->frac2float($raw_exif[$d]),"1") > 0){
-										$v = "1/".$a;
+			case 'FNumber':	        if(($a = number_format($this->frac2float($raw_exif[$d]),"1")) > 0){
+										$v = "f".$a;
 									}else{
 										$v='Unknown';
 									}
